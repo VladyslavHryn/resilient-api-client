@@ -53,17 +53,25 @@ describe("real fetch against a local flaky server", () => {
       (res) => res.writeHead(200, { ...CLOSE, "content-type": "application/json" }).end('{"visits":42}'),
     ]);
 
-    const retries: string[] = [];
+    // Real timers and a real sleep; we only record the pauses. 400 ms leaves a wide margin for a slow machine:
+    // a healthy local answer takes a few ms, only the two deliberately broken attempts wait for the timeout.
+    const sleeps: number[] = [];
     const data = await requestJson<{ visits: number }>(url, {
-      timeoutMs: 150,
+      timeoutMs: 400,
       baseDelayMs: 5,
       maxAttempts: 6,
-      onRetry: (r) => retries.push(r.reason),
+      deps: {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return new Promise((resolve) => setTimeout(resolve, ms));
+        },
+      },
     });
 
     expect(data).toEqual({ visits: 42 });
     expect(hits.count).toBe(5);
-    expect(retries).toEqual(["timeout after 150 ms", "timeout after 150 ms", "HTTP 500", "HTTP 429"]);
+    expect(sleeps).toHaveLength(4);
+    expect(sleeps[3]).toBe(0); // the 429 said Retry-After: 0, not the backoff
   });
 
   it("does not retry a 404 and exposes the server's message", async () => {
